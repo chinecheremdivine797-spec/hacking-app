@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function ownsDocument(userId) { return signedIn() && request.auth.uid == userId; }
+
+    match /users/{userId}/blockingRules/{ruleId} {
+      allow read, delete: if ownsDocument(userId);
+      allow create: if ownsDocument(userId)
+        && request.resource.data.keys().hasOnly(['domain', 'reason', 'scope', 'status', 'createdAt', 'kind'])
+        && request.resource.data.domain is string
+        && request.resource.data.domain.size() > 0
+        && request.resource.data.domain.size() <= 253
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.scope == 'Account policy (not enforced on device)'
+        && request.resource.data.status == 'Pending device integration'
+        && request.resource.data.kind in ['website', 'app']
+        && request.resource.data.createdAt == request.time;
+      allow update: if ownsDocument(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reason'])
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 500;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
