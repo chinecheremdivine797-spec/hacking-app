@@ -20,6 +20,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm install
+      - name: Run foundation tests
+        run: npm test
       - name: Build app
         run: npm run build
       - name: Upload build output
