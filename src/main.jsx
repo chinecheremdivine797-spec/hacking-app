@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ShieldCheck, LayoutDashboard, Code2, Network, ListChecks, FileSearch, Siren, BrainCircuit, Globe, Settings, Search, Bell, Menu, X, ChevronRight, Plus, CheckCircle2, AlertTriangle, Clock3, LockKeyhole, Activity, BookOpen, Download, RotateCcw } from 'lucide-react';
 import './styles.css';
+import { supabase, supabaseConfigured } from './lib/supabase.js';
 
 const sections = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -143,4 +144,56 @@ function App() {
 function PageHeading({eyebrow,title,subtitle}) { return <div className="page-heading simple"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{subtitle}</p></div></div>; }
 function Stat({icon:Icon,label,value,note,tone}) { return <div className="stat-card"><div className={'stat-icon '+tone}><Icon size={19}/></div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-note">{note}</div></div>; }
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App/></React.StrictMode>);
+function AuthGate() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  React.useEffect(() => {
+    if (!supabaseConfigured || !supabase) { setLoading(false); return; }
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) setMessage(error.message);
+      setSession(data?.session ?? null);
+      setLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setLoading(false);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    setBusy(true); setMessage('');
+    try {
+      const result = mode === 'signup'
+        ? await supabase.auth.signUp({ email: email.trim(), password })
+        : await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (result.error) throw result.error;
+      if (mode === 'signup' && !result.data.session) {
+        setMessage('Account request submitted. Check your email to confirm the account before signing in.');
+      } else {
+        setMessage('Authentication request completed.');
+      }
+    } catch (error) {
+      setMessage(error?.message || 'Authentication failed. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!supabaseConfigured) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">SECURE ACCESS SETUP</div><h1>Connect Supabase first</h1><p>CYBERRECOVER AI is locked until Supabase authentication is configured. This prevents the prototype workspace from being mistaken for a protected production session.</p><ol className="numbered-list"><li>Create a Supabase project.</li><li>Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in your deployment environment.</li><li>Review and run <code>supabase/schema.sql</code> in the Supabase SQL Editor.</li><li>Redeploy and test with two separate accounts.</li></ol><p className="field-help">Never use a service-role key in browser code. No login provider or database is connected until you configure these values.</p><a className="text-button" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Open Supabase dashboard ↗</a></section></div>;
+
+  if (loading) return <div className="auth-shell"><section className="auth-card"><h1>Checking secure session…</h1><p>Please wait while authentication status is checked.</p></section></div>;
+
+  if (!session) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">CYBERRECOVER AI</div><h1>{mode === 'signup' ? 'Create your account' : 'Sign in securely'}</h1><p>Authentication is provided by your configured Supabase project.</p><form className="stack-form" onSubmit={submitAuth}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} value={password} onChange={event => setPassword(event.target.value)} required /></label><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button></form>{message && <p className="auth-message" role="status">{message}</p>}<button className="text-button" onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setMessage(''); }}>{mode === 'signup' ? 'Already registered? Sign in' : 'Need an account? Create one'}</button><p className="field-help">Use an account you control. Enable email confirmation and configure password recovery in Supabase before real deployment.</p></section></div>;
+
+  return <><div className="signed-in-strip"><span>Signed in as <b>{session.user.email}</b></span><button className="secondary-button" onClick={async () => { const { error } = await supabase.auth.signOut(); if (error) setMessage(error.message); }}>Sign out</button>{message && <span role="status">{message}</span>}</div><App /></>;
+}
+
+createRoot(document.getElementById('root')).render(<React.StrictMode><AuthGate /></React.StrictMode>);
