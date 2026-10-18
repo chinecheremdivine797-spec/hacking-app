@@ -2,7 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ShieldCheck, LayoutDashboard, Code2, Network, ListChecks, FileSearch, Siren, BrainCircuit, Globe, Settings, Search, Bell, Menu, X, ChevronRight, Plus, CheckCircle2, AlertTriangle, Clock3, LockKeyhole, Activity, BookOpen, Download, RotateCcw } from 'lucide-react';
 import './styles.css';
-import { supabase, supabaseConfigured } from './lib/supabase.js';
+import { auth, db, firebaseConfigured } from './lib/firebase.js';
+import { onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { collection, addDoc, deleteDoc, doc, onSnapshot, serverTimestamp, query as firestoreQuery, orderBy } from 'firebase/firestore';
 
 const sections = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -27,11 +29,18 @@ const initialRules = [
   { id: 2, domain: 'malware-demo.test', reason: 'Safe demonstration domain', status: 'Simulation only', scope: 'Training device' }
 ];
 
-function App() {
+function App({ user }) {
   const [active, setActive] = useState('overview');
   const [mobileNav, setMobileNav] = useState(false);
   const [query, setQuery] = useState('');
-  const [rules, setRules] = useState(initialRules);
+  const [rules, setRules] = useState(firebaseConfigured ? [] : initialRules);
+  const [ruleKind, setRuleKind] = useState('website');
+
+  React.useEffect(() => {
+    if (!firebaseConfigured || !db || !user) return;
+    const q = firestoreQuery(collection(db, 'users', user.uid, 'blockingRules'), orderBy('createdAt', 'desc'));
+    return onSnapshot(q, snapshot => setRules(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))), error => setNotice('Could not load account policies. Check Firestore rules and configuration. ' + error.message));
+  }, [user]);
   const [domain, setDomain] = useState('');
   const [reason, setReason] = useState('');
   const [notice, setNotice] = useState('');
@@ -45,16 +54,22 @@ function App() {
   const filteredRules = useMemo(() => rules.filter(r => (r.domain + ' ' + r.reason + ' ' + r.scope).toLowerCase().includes(query.toLowerCase())), [rules, query]);
   const title = sections.find(s => s.id === active)?.label || 'Overview';
 
-  function addRule(e) {
+  async function addRule(e) {
     e.preventDefault();
     const clean = domain.trim().toLowerCase();
-    if (!clean || !/^[a-z0-9.-]+$/.test(clean) || !clean.includes('.')) {
-      setNotice('Enter a valid domain such as example.com. This prototype stores a rule; it does not enforce network blocking.');
-      return;
+    const valid = ruleKind === 'website' ? /^[a-z0-9.-]+$/.test(clean) && clean.includes('.') && !clean.startsWith('.') && !clean.endsWith('.') : /^[a-z0-9._-]{2,160}$/.test(clean);
+    if (!clean || !valid) { setNotice(ruleKind === 'website' ? 'Enter a valid domain such as example.com.' : 'Enter a valid app name or package ID.'); return; }
+    const policy = { domain: clean, reason: reason.trim().slice(0, 500) || 'No reason supplied', kind: ruleKind, status: 'Pending device integration', scope: 'Account policy (not enforced on device)' };
+    if (firebaseConfigured && db && user) {
+      try {
+        await addDoc(collection(db, 'users', user.uid, 'blockingRules'), { ...policy, createdAt: serverTimestamp() });
+        setNotice('Policy saved to your Firebase account. Device integration is pending; nothing has been blocked.');
+      } catch (error) { setNotice('Policy was not saved. Check Firebase configuration and Firestore Security Rules. ' + error.message); return; }
+    } else {
+      setRules(prev => [{ id: Date.now(), ...policy, status: 'Simulation only', scope: 'This browser prototype' }, ...prev]);
+      setNotice('Policy added to this browser session as a simulation. No website or app has been blocked.');
     }
-    setRules(prev => [{ id: Date.now(), domain: clean, reason: reason.trim() || 'No reason supplied', status: 'Simulation only', scope: 'This browser prototype' }, ...prev]);
     setDomain(''); setReason('');
-    setNotice('Rule saved in this session as a simulation. No website or app has been blocked on your device.');
   }
 
   function createAssessment(e) {
@@ -114,7 +129,7 @@ function App() {
         {active === 'cloud' && <><PageHeading eyebrow="INFRASTRUCTURE POSTURE" title="Cloud & Infrastructure Security" subtitle="A manual checklist; no cloud account is connected or scanned."/><section className="panel"><h2>Configuration review</h2>{[['MFA for privileged accounts','Protect administrator accounts.'],['Least-privilege access','Review excessive permissions.'],['Audit logging and retention','Confirm collection and alerting.'],['Patching and supported versions','Review server and image updates.'],['Backup restoration test','Verify that recovery actually works.']].map((x,i)=><div className="control-row" key={x[0]}><div><b>{x[0]}</b><p>{x[1]}</p></div><span className="status-chip warning">Manual check</span></div>)}<div className="info-card"><LockKeyhole size={20}/><div><b>Cloud connectors</b><p>AWS, Azure and Google Cloud integrations are not configured.</p></div></div></section></>}
         {active === 'iam' && <><PageHeading eyebrow="IDENTITY GOVERNANCE" title="Identity & Access Management" subtitle="Plan role-based access; these controls are not enforced by this frontend."/><div className="info-card"><LockKeyhole size={20}/><div><b>Backend required</b><p>Do not rely on this page to protect client data. Production access checks must run server-side, with tenant isolation tests.</p></div></div><section className="panel"><h2>Role design</h2>{[['Administrator','Manage configuration; privileged actions need MFA.'],['Analyst','Review authorized cases and logs.'],['Incident responder','Manage assigned incident workflows.'],['Client','View only their own approved reports.']].map(x=><div className="control-row" key={x[0]}><div><b>{x[0]}</b><p>{x[1]}</p></div><span className="status-chip warning">Design only</span></div>)}</section><section className="panel"><h2>Production requirements</h2><ol className="numbered-list"><li>Trusted identity provider, MFA and secure sessions.</li><li>Server-side authorization on every sensitive action.</li><li>Tests proving clients cannot access another client's records.</li><li>Session revocation and safe account recovery.</li></ol></section></>}
         {active === 'dfir' && <><PageHeading eyebrow="EVIDENCE & RECOVERY" title="Digital Forensics & Incident Response" subtitle="Follow an evidence-aware response process. No device acquisition is performed."/><div className="incident-steps">{[['1','Preserve','Record source, time, collector and authorization.'],['2','Validate','Correlate logs and confirm the incident scope.'],['3','Contain','Use an approved, proportionate containment action.'],['4','Recover','Apply fixes and verify normal operation.'],['5','Review','Document lessons and preventive actions.']].map(x=><div className="incident-step" key={x[0]}><span>{x[0]}</span><div><b>{x[1]}</b><p>{x[2]}</p></div></div>)}</div><section className="panel"><div className="control-row"><div><b>Evidence chain of custody</b><p>Requires persistent backend records and audit logging.</p></div><span className="status-chip warning">Not implemented</span></div><div className="control-row"><div><b>Forensic acquisition</b><p>No device imaging or recovery connector is configured.</p></div><span className="status-chip neutral">Not connected</span></div></section></>}
-        {active === 'blocking' && <><PageHeading eyebrow="DEVICE ACCESS CONTROLS" title="Website & App Blocking" subtitle="Create and manage simulated rules for devices you own or are authorized to manage."/><div className="info-card"><LockKeyhole size={20}/><div><b>Enforcement is not connected</b><p>These rules are stored in browser memory only. Actual blocking requires a supported DNS/VPN filter, router configuration, or Android device-management integration. This prototype cannot block apps or clear their private data.</p></div></div><section className="panel"><div className="panel-heading"><div><h2>Add a website rule</h2><p>Use test domains or domains you are authorized to manage.</p></div><Plus size={18}/></div><form className="form-grid" onSubmit={addRule}><label>Domain<input value={domain} onChange={e=>setDomain(e.target.value)} placeholder="example.com" required/></label><label>Reason<input value={reason} onChange={e=>setReason(e.target.value)} placeholder="Why should this be blocked?"/></label><button className="primary-button" type="submit"><Plus size={16}/> Save simulated rule</button></form></section><section className="panel"><div className="panel-heading list-heading"><div><h2>Blocklist</h2><p>{rules.length} rules in this session</p></div><div className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search rules"/></div></div>{filteredRules.length ? <div className="table-wrap"><table><thead><tr><th>Domain</th><th>Reason</th><th>Scope</th><th>Status</th><th></th></tr></thead><tbody>{filteredRules.map(rule=><tr key={rule.id}><td><b>{rule.domain}</b></td><td>{rule.reason}</td><td>{rule.scope}</td><td><span className="status-chip neutral">{rule.status}</span></td><td><button className="small-button" onClick={()=>{setRules(prev=>prev.filter(r=>r.id!==rule.id));setNotice('Rule removed from this browser session. No device policy changed.')}}>Remove</button></td></tr>)}</tbody></table></div>:<div className="empty-state">No rules match your search.</div>}</section></>}
+        {active === 'blocking' && <><PageHeading eyebrow="DEVICE ACCESS CONTROLS" title="Website & App Blocking" subtitle="Create and manage simulated rules for devices you own or are authorized to manage."/><div className="info-card"><LockKeyhole size={20}/><div><b>Enforcement is not connected</b><p>Policies can be saved to your Firebase account when configured, but no device enforcement is connected. Actual blocking requires a separate supported DNS/VPN filter, router configuration, or platform-specific device integration.</p></div></div><section className="panel"><div className="panel-heading"><div><h2>Add a blocking policy</h2><p>Save policy requests for devices you own or are authorized to manage.</p></div><Plus size={18}/></div><form className="form-grid" onSubmit={addRule}><label>Policy type<select value={ruleKind} onChange={e=>setRuleKind(e.target.value)}><option value="website">Website / domain</option><option value="app">App name / package ID</option></select></label><label>{ruleKind === 'website' ? 'Domain' : 'App name or package ID'}<input value={domain} onChange={e=>setDomain(e.target.value)} placeholder={ruleKind === 'website' ? 'example.com' : 'com.example.app'} required/></label><label>Reason<input value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} placeholder="Why should this be blocked?"/></label><button className="primary-button" type="submit"><Plus size={16}/> Save policy request</button></form></section><section className="panel"><div className="panel-heading list-heading"><div><h2>Blocklist</h2><p>{rules.length} {firebaseConfigured && user ? 'account policies' : 'sample rules in this session'}</p></div><div className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search rules"/></div></div>{filteredRules.length ? <div className="table-wrap"><table><thead><tr><th>Website / App</th><th>Reason</th><th>Scope</th><th>Status</th><th></th></tr></thead><tbody>{filteredRules.map(rule=><tr key={rule.id}><td><span className="status-chip neutral">{rule.kind || 'website'}</span> <b>{rule.domain}</b></td><td>{rule.reason}</td><td>{rule.scope}</td><td><span className="status-chip neutral">{rule.status}</span></td><td><button className="small-button" onClick={async ()=>{if(firebaseConfigured && db && user){try{await deleteDoc(doc(db,'users',user.uid,'blockingRules',rule.id));setNotice('Policy removed from your account. No device policy was applied.')}catch(error){setNotice('Could not remove policy: '+error.message)}}else{setRules(prev=>prev.filter(r=>r.id!==rule.id));setNotice('Rule removed from this browser session. No device policy changed.')}}}>Remove</button></td></tr>)}</tbody></table></div>:<div className="empty-state">No rules match your search.</div>}</section></>}
         {active === 'assessments' && <><PageHeading eyebrow="AUTHORIZED SECURITY TESTING" title="Assessment workspace" subtitle="Record an authorized assessment before any testing takes place."/><div className="info-card"><ShieldCheck size={20}/><div><b>Authorization is mandatory</b><p>This prototype records scope only. It does not scan networks, exploit systems, or verify written authorization.</p></div></div><section className="panel"><h2>New assessment record</h2><form className="stack-form" onSubmit={createAssessment}><label>Assessment name<input value={assessmentName} onChange={e=>setAssessmentName(e.target.value)} placeholder="e.g. Internal firewall configuration review" required/></label><label className="check-label"><input type="checkbox" checked={authorized} onChange={e=>setAuthorized(e.target.checked)}/> I confirm written permission and a defined scope exist.</label><button className="primary-button" type="submit">Create assessment record <ChevronRight size={16}/></button></form></section><section className="panel"><div className="panel-heading"><div><h2>Assessment records</h2><p>Records created in this session</p></div></div>{assessments.length ? assessments.map(a=><div className="record-row" key={a.id}><div className="record-icon"><Network size={18}/></div><div className="record-main"><b>{a.name}</b><p>{a.date} · {a.status}</p></div><span className="status-chip neutral">Not scanned</span></div>) : <div className="empty-state">No assessment records yet.</div>}</section></>}
         {active === 'logs' && <><PageHeading eyebrow="EVENT INVESTIGATION" title="Log Analysis" subtitle="Inspect sample or authorized logs for simple warning patterns."/><section className="panel"><label>Log content<textarea className="log-input" value={logs} onChange={e=>setLogs(e.target.value)} rows="8" spellCheck="false"/></label><div className="button-row"><button className="primary-button" onClick={analyzeLogs}><FileSearch size={16}/> Analyze locally</button><button className="secondary-button" onClick={()=>{setLogs('');setLogSummary(null)}}><RotateCcw size={16}/> Clear</button></div><p className="field-help">Local pattern matching only; this is not an AI analysis or a complete detection engine.</p></section>{logSummary && <section className="panel"><h2>Analysis summary</h2><div className="stats-grid compact"><Stat icon={FileSearch} label="Lines processed" value={logSummary.count} note="Local text only" tone="blue"/><Stat icon={AlertTriangle} label="Potential warning lines" value={logSummary.warnings} note="Keyword matches, not confirmed incidents" tone="amber"/></div>{logSummary.items.map((line,i)=><div className="log-result" key={i}><AlertTriangle size={16}/><code>{line}</code></div>)}</section>}</>}
         {active === 'codelab' && <><PageHeading eyebrow="LEARN DEFENSIVE CODING" title="Code Lab" subtitle="Review a safe sample and learn what defensive validation looks like."/><section className="panel"><div className="panel-heading"><div><h2>Example: validate a domain input</h2><p>Read-only example. It does not scan or contact the domain.</p></div><Code2 size={19}/></div><pre className="code-block"><code>{`function validateDomain(value) {
@@ -145,7 +160,7 @@ function PageHeading({eyebrow,title,subtitle}) { return <div className="page-hea
 function Stat({icon:Icon,label,value,note,tone}) { return <div className="stat-card"><div className={'stat-icon '+tone}><Icon size={19}/></div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-note">{note}</div></div>; }
 
 function AuthGate() {
-  const [session, setSession] = useState(null);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState('signin');
   const [email, setEmail] = useState('');
@@ -154,46 +169,27 @@ function AuthGate() {
   const [busy, setBusy] = useState(false);
 
   React.useEffect(() => {
-    if (!supabaseConfigured || !supabase) { setLoading(false); return; }
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (error) setMessage(error.message);
-      setSession(data?.session ?? null);
-      setLoading(false);
-    });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setLoading(false);
-    });
-    return () => listener.subscription.unsubscribe();
+    if (!firebaseConfigured || !auth) { setLoading(false); return; }
+    return onAuthStateChanged(auth, nextUser => { setUser(nextUser); setLoading(false); });
   }, []);
 
   async function submitAuth(event) {
-    event.preventDefault();
-    setBusy(true); setMessage('');
+    event.preventDefault(); setBusy(true); setMessage('');
     try {
-      const result = mode === 'signup'
-        ? await supabase.auth.signUp({ email: email.trim(), password })
-        : await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (result.error) throw result.error;
-      if (mode === 'signup' && !result.data.session) {
-        setMessage('Account request submitted. Check your email to confirm the account before signing in.');
-      } else {
-        setMessage('Authentication request completed.');
-      }
-    } catch (error) {
-      setMessage(error?.message || 'Authentication failed. Please try again.');
-    } finally {
-      setBusy(false);
-    }
+      if (!auth) throw new Error('Firebase is not configured.');
+      if (mode === 'signup') await createUserWithEmailAndPassword(auth, email.trim(), password);
+      else await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch (error) { setMessage(error?.message || 'Authentication failed. Please try again.'); }
+    finally { setBusy(false); }
   }
 
-  if (!supabaseConfigured) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">SECURE ACCESS SETUP</div><h1>Connect Supabase first</h1><p>CYBERRECOVER AI is locked until Supabase authentication is configured. This prevents the prototype workspace from being mistaken for a protected production session.</p><ol className="numbered-list"><li>Create a Supabase project.</li><li>Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in your deployment environment.</li><li>Review and run <code>supabase/schema.sql</code> in the Supabase SQL Editor.</li><li>Redeploy and test with two separate accounts.</li></ol><p className="field-help">Never use a service-role key in browser code. No login provider or database is connected until you configure these values.</p><a className="text-button" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Open Supabase dashboard ↗</a></section></div>;
+  if (!firebaseConfigured) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">FIREBASE SETUP REQUIRED</div><h1>Connect Firebase first</h1><p>Blocking policies are simulation-only until Firebase is configured.</p><ol className="numbered-list"><li>Create a Firebase project and enable Email/Password Authentication.</li><li>Create Cloud Firestore and publish <code>firestore.rules</code>.</li><li>Set the VITE_FIREBASE variables from <code>.env.example</code>.</li><li>Redeploy and test two separate accounts.</li></ol><p className="field-help">Never put Firebase Admin SDK service-account credentials in browser code.</p><a className="text-button" href="https://console.firebase.google.com/" target="_blank" rel="noreferrer">Open Firebase console ↗</a></section></div>;
 
-  if (loading) return <div className="auth-shell"><section className="auth-card"><h1>Checking secure session…</h1><p>Please wait while authentication status is checked.</p></section></div>;
+  if (loading) return <div className="auth-shell"><section className="auth-card"><h1>Checking secure session…</h1><p>Please wait while Firebase Authentication is checked.</p></section></div>;
 
-  if (!session) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">CYBERRECOVER AI</div><h1>{mode === 'signup' ? 'Create your account' : 'Sign in securely'}</h1><p>Authentication is provided by your configured Supabase project.</p><form className="stack-form" onSubmit={submitAuth}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} value={password} onChange={event => setPassword(event.target.value)} required /></label><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button></form>{message && <p className="auth-message" role="status">{message}</p>}<button className="text-button" onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setMessage(''); }}>{mode === 'signup' ? 'Already registered? Sign in' : 'Need an account? Create one'}</button><p className="field-help">Use an account you control. Enable email confirmation and configure password recovery in Supabase before real deployment.</p></section></div>;
+  if (!user) return <div className="auth-shell"><section className="auth-card"><div className="brand-mark"><ShieldCheck size={24}/></div><div className="eyebrow">CYBERRECOVER AI</div><h1>{mode === 'signup' ? 'Create your account' : 'Sign in securely'}</h1><p>Authentication is provided by your configured Firebase project.</p><form className="stack-form" onSubmit={submitAuth}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} value={password} onChange={event => setPassword(event.target.value)} required /></label><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button></form>{message && <p className="auth-message" role="status">{message}</p>}<button className="text-button" onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setMessage(''); }}>{mode === 'signup' ? 'Already registered? Sign in' : 'Need an account? Create one'}</button><p className="field-help">Enable email verification and configure recovery settings in Firebase before production use.</p></section></div>;
 
-  return <><div className="signed-in-strip"><span>Signed in as <b>{session.user.email}</b></span><button className="secondary-button" onClick={async () => { const { error } = await supabase.auth.signOut(); if (error) setMessage(error.message); }}>Sign out</button>{message && <span role="status">{message}</span>}</div><App /></>;
+  return <><div className="signed-in-strip"><span>Signed in as <b>{user.email}</b></span><button className="secondary-button" onClick={async () => { try { await signOut(auth); } catch (error) { setMessage(error.message); } }}>Sign out</button>{message && <span role="status">{message}</span>}</div><App user={user} /></>;
 }
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><AuthGate /></React.StrictMode>);
