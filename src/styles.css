@@ -18,3 +18,16 @@
 .signed-in-strip b{overflow-wrap:anywhere}
 button:disabled{opacity:.6;cursor:wait}
 @media(max-width:520px){.auth-card{padding:22px}.signed-in-strip{align-items:flex-start;flex-wrap:wrap}}
+
+/* Phone-number threat assessment */
+.threat-option{display:flex;align-items:flex-start;gap:11px;padding:12px 10px;border-top:1px solid #243149;color:#c4d0e3;font-size:12px;line-height:1.6;cursor:pointer}
+.threat-option input,.threat-radio input{accent-color:#38bdf8;flex-shrink:0;margin-top:3px;width:16px;height:16px}
+.threat-network{margin:20px 0;padding:15px;background:#0c1527;border:1px solid #2b3a54;border-radius:9px}
+.threat-network>b{font-size:12px}
+.threat-radio{display:grid;gap:12px;margin-top:13px}
+.threat-radio label{display:flex;gap:9px;align-items:flex-start;font-size:11px;color:#aebed3;line-height:1.6}
+.threat-result{border-color:#315475}
+.threat-result>p{font-size:12px;line-height:1.8;color:#aebed3}
+.threat-links{display:flex;flex-wrap:wrap;gap:16px;margin:15px 0}
+.threat-links a{color:#72c9ff;font-size:11px;text-decoration:none}
+.threat-links a:hover{text-decoration:underline}
